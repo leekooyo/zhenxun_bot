@@ -1,5 +1,7 @@
 import os
 import time
+import asyncio
+from asyncio import timeout
 
 from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata
@@ -41,6 +43,9 @@ _matcher = on_alconna(
 
 ResourceDirManager.add_temp_dir(TEMP_PATH, True)
 
+
+# 添加信号量控制
+_clear_data_semaphore = asyncio.Semaphore(5)
 
 @_matcher.handle()
 async def _(session: EventSession):
@@ -88,9 +93,16 @@ def _clear_data() -> float:
     hour=1,
     minute=1,
 )
-async def _():
-    size = await _clear_data()
-    logger.info(
-        f"自动清理临时数据完成，共清理了 {size / 1024 / 1024:.2f}MB 的数据...",
-        "定时任务",
-    )
+async def clear_temp_data_task():
+    try:
+        async with _clear_data_semaphore:
+            async with timeout(30):  # 30秒超时控制
+                size = await _clear_data()
+                logger.info(
+                    f"自动清理临时数据完成，共清理了 {size / 1024 / 1024:.2f}MB 的数据...",
+                    "定时任务",
+                )
+    except asyncio.TimeoutError:
+        logger.error("清理临时数据超时", "定时任务")
+    except Exception as e:
+        logger.error("清理临时数据失败", "定时任务", e=e)

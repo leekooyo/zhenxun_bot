@@ -3,6 +3,9 @@ from nonebot.plugin import PluginMetadata
 from nonebot_plugin_alconna import UniMsg
 from nonebot_plugin_apscheduler import scheduler
 from nonebot_plugin_session import EventSession
+from asyncio import create_task, TimeoutError, wait_for
+from asyncio import Semaphore
+from typing import List
 
 from zhenxun.configs.config import Config
 from zhenxun.configs.utils import PluginExtraData, RegisterConfig
@@ -58,6 +61,30 @@ async def _(message: UniMsg, session: EventSession):
     )
 
 
+# 创建信号量限制并发
+_semaphore = Semaphore(5)
+
+async def process_chat_history_with_timeout(message_list: List[ChatHistory], timeout: float = 30.0):
+    """
+    处理聊天历史记录的异步函数
+    
+    Args:
+        message_list: 待处理的消息列表
+        timeout: 超时时间，默认30秒
+    """
+    try:
+        async with _semaphore:
+            # 使用 wait_for 添加超时限制
+            await wait_for(
+                ChatHistory.bulk_create(message_list),
+                timeout=timeout
+            )
+            logger.debug(f"批量添加聊天记录 {len(message_list)} 条", "定时任务")
+    except TimeoutError:
+        logger.error("批量添加聊天记录超时", "定时任务")
+    except Exception as e:
+        logger.error("批量添加聊天记录失败", "定时任务", e=e)
+
 @scheduler.scheduled_job(
     "interval",
     minutes=1,
@@ -67,8 +94,7 @@ async def _():
         message_list = TEMP_LIST.copy()
         TEMP_LIST.clear()
         if message_list:
-            await ChatHistory.bulk_create(message_list)
-        logger.debug(f"批量添加聊天记录 {len(message_list)} 条", "定时任务")
+            await process_chat_history_with_timeout(message_list)
     except Exception as e:
         logger.error("定时批量添加聊天记录", "定时任务", e=e)
 

@@ -26,6 +26,11 @@ from ._data_source import SignManage
 from .goods_register import driver  # noqa: F401
 from .utils import clear_sign_data_pic
 
+import asyncio
+from functools import partial
+import signal
+from typing import Optional
+
 __plugin_meta__ = PluginMetadata(
     name="签到",
     description="每日签到，证明你在这里",
@@ -180,13 +185,29 @@ async def _(
     await MessageUtils.build_message(image).send()
 
 
+# 添加信号量控制
+_clear_semaphore = asyncio.Semaphore(5)
+
+async def _timeout_handler(signum: int, frame: object | None) -> None:
+    raise TimeoutError("清理签到数据超时")
+
 @scheduler.scheduled_job(
     "interval",
     hours=1,
 )
-async def _():
+async def clear_sign_data_task():
     try:
-        clear_sign_data_pic()
-        logger.info("清理日常签到图片数据数据完成...", "签到")
+        async with _clear_semaphore:
+            # 设置30秒超时
+            signal.signal(signal.SIGALRM, partial(_timeout_handler))
+            signal.alarm(30)
+            
+            try:
+                await clear_sign_data_pic()
+                logger.info("清理日常签到图片数据完成...", "签到")
+            except TimeoutError:
+                logger.error("清理日常签到图片数据超时...")
+            finally:
+                signal.alarm(0)  # 清除定时器
     except Exception as e:
-        logger.error("清理日常签到图片数据数据失败...", e=e)
+        logger.error("清理日常签到图片数据失败...", e=e)

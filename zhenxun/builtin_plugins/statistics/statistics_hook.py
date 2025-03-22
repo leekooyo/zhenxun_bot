@@ -1,4 +1,14 @@
+'''
+Author: xx
+Date: 2025-03-22 14:42:41
+LastEditors: Do not edit
+LastEditTime: 2025-03-23 00:56:30
+Description: 
+FilePath: \zhenxun\zhenxun_bot\zhenxun\builtin_plugins\statistics\statistics_hook.py
+'''
 from datetime import datetime
+import asyncio
+from asyncio import timeout
 
 from nonebot.adapters import Bot, Event
 from nonebot.adapters.onebot.v11 import PokeNotifyEvent
@@ -25,6 +35,8 @@ __plugin_meta__ = PluginMetadata(
 
 TEMP_LIST = []
 
+# 添加信号量控制
+_statistics_semaphore = asyncio.Semaphore(5)
 
 @run_postprocessor
 async def _(
@@ -57,12 +69,16 @@ async def _(
     "interval",
     minutes=1,
 )
-async def _():
+async def bulk_statistics_task():
     try:
-        call_list = TEMP_LIST.copy()
-        TEMP_LIST.clear()
-        if call_list:
-            await Statistics.bulk_create(call_list)
-        logger.debug(f"批量添加调用记录 {len(call_list)} 条", "定时任务")
+        async with _statistics_semaphore:
+            async with timeout(30):  # 30秒超时控制
+                call_list = TEMP_LIST.copy()
+                TEMP_LIST.clear()
+                if call_list:
+                    await Statistics.bulk_create(call_list)
+                logger.debug(f"批量添加调用记录 {len(call_list)} 条", "定时任务")
+    except asyncio.TimeoutError:
+        logger.error("批量添加调用记录超时", "定时任务")
     except Exception as e:
         logger.error("定时批量添加调用记录", "定时任务", e=e)

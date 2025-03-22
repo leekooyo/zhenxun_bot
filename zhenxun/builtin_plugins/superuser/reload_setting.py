@@ -1,3 +1,11 @@
+'''
+Author: xx
+Date: 2025-03-22 14:42:41
+LastEditors: Do not edit
+LastEditTime: 2025-03-23 00:57:30
+Description: 
+FilePath: \zhenxun\zhenxun_bot\zhenxun\builtin_plugins\superuser\reload_setting.py
+'''
 from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import to_me
@@ -10,6 +18,9 @@ from zhenxun.configs.utils import PluginExtraData, RegisterConfig
 from zhenxun.services.log import logger
 from zhenxun.utils.enum import PluginType
 from zhenxun.utils.message import MessageUtils
+
+import asyncio
+from asyncio import timeout
 
 __plugin_meta__ = PluginMetadata(
     name="重载配置",
@@ -50,6 +61,8 @@ _matcher = on_alconna(
     block=True,
 )
 
+# 添加信号量控制
+_reload_semaphore = asyncio.Semaphore(5)
 
 @_matcher.handle()
 async def _(session: EventSession, arparma: Arparma):
@@ -62,7 +75,14 @@ async def _(session: EventSession, arparma: Arparma):
     "interval",
     seconds=Config.get_config("reload_setting", "AUTO_RELOAD_TIME", 180),
 )
-async def _():
-    if Config.get_config("reload_setting", "AUTO_RELOAD"):
-        Config.reload()
-        logger.debug("已自动重载配置文件...")
+async def auto_reload_config_task():
+    try:
+        async with _reload_semaphore:
+            async with timeout(30):  # 30秒超时控制
+                if Config.get_config("reload_setting", "AUTO_RELOAD"):
+                    Config.reload()
+                    logger.debug("已自动重载配置文件...")
+    except asyncio.TimeoutError:
+        logger.error("重载配置文件超时...")
+    except Exception as e:
+        logger.error("重载配置文件失败", e=e)

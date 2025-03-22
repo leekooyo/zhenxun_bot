@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 import random
 import time
+from asyncio import TimeoutError
 
 from nonebot import on_message, on_request
 from nonebot.adapters.onebot.v11 import (
@@ -248,9 +249,20 @@ async def _(bot: v12Bot | v11Bot, event: GroupRequestEvent, session: EventSessio
 @scheduler.scheduled_job(
     "interval",
     minutes=5,
+    max_instances=5,
+    misfire_grace_time=300,
 )
-async def _():
-    Timer.clear()
+async def clear_timer():
+    try:
+        await asyncio.wait_for(
+            Timer.clear(),
+            timeout=30.0
+        )
+        logger.info("计时器清理任务成功完成")
+    except TimeoutError:
+        logger.error("计时器清理任务超时（超过30秒）")
+    except Exception as e:
+        logger.error(f"清理计时器时发生错误: {e!s}")
 
 
 async def _():

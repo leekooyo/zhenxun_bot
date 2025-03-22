@@ -1,7 +1,18 @@
+'''
+Author: xx
+Date: 2025-03-22 14:42:41
+LastEditors: Do not edit
+LastEditTime: 2025-03-23 00:55:31
+Description: 
+FilePath: \zhenxun\zhenxun_bot\zhenxun\builtin_plugins\scheduler\morning.py
+'''
 import nonebot
 from nonebot.adapters import Bot
 from nonebot.plugin import PluginMetadata
 from nonebot_plugin_apscheduler import scheduler
+import asyncio
+from asyncio import Semaphore
+from functools import partial
 
 from zhenxun.configs.config import BotConfig
 from zhenxun.configs.path_config import IMAGE_PATH
@@ -33,6 +44,8 @@ __plugin_meta__ = PluginMetadata(
 
 driver = nonebot.get_driver()
 
+# 创建信号量
+morning_semaphore = Semaphore(5)
 
 async def check(bot: Bot, group_id: str) -> bool:
     return not await CommonUtils.task_is_block(bot, "morning_goodnight", group_id)
@@ -44,10 +57,20 @@ async def check(bot: Bot, group_id: str) -> bool:
     hour=6,
     minute=1,
 )
-async def _():
-    message = MessageUtils.build_message(["早上好", IMAGE_PATH / "zhenxun" / "zao.jpg"])
-    await broadcast_group(message, log_cmd="被动早晚安", check_func=check)
-    logger.info("每日早安发送...")
+async def send_morning_greeting():
+    try:
+        async with morning_semaphore:
+            message = MessageUtils.build_message(["早上好", IMAGE_PATH / "zhenxun" / "zao.jpg"])
+            # 设置30秒超时
+            await asyncio.wait_for(
+                broadcast_group(message, log_cmd="被动早晚安", check_func=check),
+                timeout=30
+            )
+            logger.info("每日早安发送...")
+    except asyncio.TimeoutError:
+        logger.error("早安消息发送超时...")
+    except Exception as e:
+        logger.error(f"早安消息发送错误: {str(e)}")
 
 
 # # 睡觉了
@@ -56,16 +79,22 @@ async def _():
     hour=23,
     minute=59,
 )
-async def _():
-    message = MessageUtils.build_message(
-        [
-            f"{BotConfig.self_nickname}要睡觉了，你们也要早点睡呀",
-            IMAGE_PATH / "zhenxun" / "sleep.jpg",
-        ]
-    )
-    await broadcast_group(
-        message,
-        log_cmd="被动早晚安",
-        check_func=check,
-    )
-    logger.info("每日晚安发送...")
+async def send_night_greeting():
+    try:
+        async with morning_semaphore:
+            message = MessageUtils.build_message(
+                [
+                    f"{BotConfig.self_nickname}要睡觉了，你们也要早点睡呀",
+                    IMAGE_PATH / "zhenxun" / "sleep.jpg",
+                ]
+            )
+            # 设置30秒超时
+            await asyncio.wait_for(
+                broadcast_group(message, log_cmd="被动早晚安", check_func=check),
+                timeout=30
+            )
+            logger.info("每日晚安发送...")
+    except asyncio.TimeoutError:
+        logger.error("晚安消息发送超时...")
+    except Exception as e:
+        logger.error(f"晚安消息发送错误: {str(e)}")

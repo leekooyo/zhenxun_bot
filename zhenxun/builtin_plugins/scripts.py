@@ -1,4 +1,5 @@
 from asyncio.exceptions import TimeoutError
+from asyncio import create_task, gather, wait_for, Semaphore
 
 import aiofiles
 import nonebot
@@ -13,42 +14,47 @@ from zhenxun.utils.http_utils import AsyncHttpx
 
 driver: Driver = nonebot.get_driver()
 
+# 创建信号量控制最大并发数
+_semaphore = Semaphore(5)
 
-@driver.on_startup
 async def update_city():
     """
     部分插件需要中国省份城市
     这里直接更新，避免插件内代码重复
     """
-    china_city = TEXT_PATH / "china_city.json"
-    if not china_city.exists():
-        data = {}
-        try:
-            logger.debug("开始更新城市列表...")
-            res = await AsyncHttpx.get(
-                "http://www.weather.com.cn/data/city3jdata/china.html", timeout=5
-            )
-            res.encoding = "utf8"
-            provinces_data = json.loads(res.text)
-            for province in provinces_data.keys():
-                data[provinces_data[province]] = []
-                res = await AsyncHttpx.get(
-                    f"http://www.weather.com.cn/data/city3jdata/provshi/{province}.html",
-                    timeout=5,
+    async with _semaphore:  # 使用信号量控制并发
+        china_city = TEXT_PATH / "china_city.json"
+        if not china_city.exists():
+            data = {}
+            try:
+                logger.debug("开始更新城市列表...")
+                res = await wait_for(
+                    AsyncHttpx.get(
+                        "http://www.weather.com.cn/data/city3jdata/china.html"
+                    ),
+                    timeout=30
                 )
                 res.encoding = "utf8"
-                city_data = json.loads(res.text)
-                for city in city_data.keys():
-                    data[provinces_data[province]].append(city_data[city])
-            async with aiofiles.open(china_city, "w", encoding="utf8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-            logger.info("自动更新城市列表完成.....")
-        except TimeoutError as e:
-            logger.warning("自动更新城市列表超时...", e=e)
-        except ValueError as e:
-            logger.warning("自动城市列表失败.....", e=e)
-        except Exception as e:
-            logger.error("自动城市列表未知错误", e=e)
+                provinces_data = json.loads(res.text)
+                for province in provinces_data.keys():
+                    data[provinces_data[province]] = []
+                    res = await AsyncHttpx.get(
+                        f"http://www.weather.com.cn/data/city3jdata/provshi/{province}.html",
+                        timeout=5,
+                    )
+                    res.encoding = "utf8"
+                    city_data = json.loads(res.text)
+                    for city in city_data.keys():
+                        data[provinces_data[province]].append(city_data[city])
+                async with aiofiles.open(china_city, "w", encoding="utf8") as f:
+                    json.dump(data, f, indent=4, ensure_ascii=False)
+                logger.info("自动更新城市列表完成.....")
+            except TimeoutError as e:
+                logger.warning("自动更新城市列表超时(30秒)...", e=e)
+            except ValueError as e:
+                logger.warning("自动城市列表失败.....", e=e)
+            except Exception as e:
+                logger.error("自动城市列表未知错误", e=e)
 
 
 # 自动更新城市列表
