@@ -158,3 +158,12 @@ resources/
 configs/config.yaml
 .vscode/launch.json
 plugins_/
+/zhenxun/plugins/
+/zhenxun/
+start.bat
+/zhenxun/.github/
+/zhenxun/.gitignore
+/zhenxun/LICENSE
+/zhenxun/README.md
+/zhenxun/docs_image/
+/zhenxun/update_version.py
