@@ -9,6 +9,7 @@ from nonebot.drivers import Driver
 from nonebot_plugin_htmlrender import template_to_pic
 from nonebot_plugin_uninfo import Uninfo
 import pytz
+import httpx
 
 from zhenxun.configs.config import BotConfig, Config
 from zhenxun.configs.path_config import IMAGE_PATH, TEMPLATE_PATH
@@ -17,6 +18,7 @@ from zhenxun.models.sign_user import SignUser
 from zhenxun.utils.http_utils import AsyncHttpx
 from zhenxun.utils.image_utils import BuildImage
 from zhenxun.utils.platform import PlatformUtils
+from zhenxun.services.log import logger
 
 from .config import (
     SIGN_BACKGROUND_PATH,
@@ -373,7 +375,7 @@ def get_level_and_next_impression(impression: float) -> tuple[str, int | float, 
     return level, next_impression, previous_impression
 
 
-def clear_sign_data_pic():
+async def clear_sign_data_pic():
     """
     清空当前签到图片数据
     """
@@ -431,7 +433,7 @@ async def _generate_html_card(
     )
     now = datetime.now()
     data = {
-        "ava_url": PlatformUtils.get_user_avatar_url(
+        "ava": await _get_safe_avatar_url(
             user.user_id, PlatformUtils.get_platform(session), session.self_id
         ),
         "name": nickname,
@@ -479,3 +481,30 @@ async def _generate_html_card(
     date = now.date()
     await image.save(SIGN_TODAY_CARD_PATH / f"{user.user_id}_{_type}_{date}.png")
     return IMAGE_PATH / "sign" / "today_card" / f"{user.user_id}_{_type}_{date}.png"
+
+
+async def _get_safe_avatar_url(user_id: str, platform: str, self_id: str) -> str:
+    """获取用户头像URL，失败时依次尝试多个备用方案"""
+    # 首先尝试平台原生头像
+    try:
+        avatar_url = PlatformUtils.get_user_avatar_url(user_id, platform, self_id)
+        async with httpx.AsyncClient() as client:
+            resp = await client.head(avatar_url, timeout=5)
+            if resp.status_code == 200:
+                return avatar_url
+    except Exception as e:
+        logger.warning(f"获取平台头像失败: {e}")
+    
+    # 尝试QQ高清头像
+    try:
+        qq_url = f"http://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
+        async with httpx.AsyncClient() as client:
+            resp = await client.head(qq_url, timeout=5)
+            if resp.status_code == 200:
+                return qq_url
+    except Exception as e:
+        logger.warning(f"获取QQ高清头像失败: {e}")
+    
+    # 最后使用QQ低清头像
+    return f"http://q4.qlogo.cn/g?b=qq&nk={user_id}&s=100"
+

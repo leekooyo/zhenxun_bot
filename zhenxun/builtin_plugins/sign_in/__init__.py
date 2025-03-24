@@ -188,26 +188,18 @@ async def _(
 # 添加信号量控制
 _clear_semaphore = asyncio.Semaphore(5)
 
-async def _timeout_handler(signum: int, frame: object | None) -> None:
-    raise TimeoutError("清理签到数据超时")
-
 @scheduler.scheduled_job(
     "interval",
     hours=1,
 )
-async def clear_sign_data_task():
+async def cleanup_sign_data_task():
     try:
         async with _clear_semaphore:
-            # 设置30秒超时
-            signal.signal(signal.SIGALRM, partial(_timeout_handler))
-            signal.alarm(30)
-            
             try:
-                await clear_sign_data_pic()
+                # 使用 wait_for 实现30秒超时控制
+                await asyncio.wait_for(clear_sign_data_pic(), timeout=30.0)
                 logger.info("清理日常签到图片数据完成...", "签到")
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 logger.error("清理日常签到图片数据超时...")
-            finally:
-                signal.alarm(0)  # 清除定时器
     except Exception as e:
         logger.error("清理日常签到图片数据失败...", e=e)

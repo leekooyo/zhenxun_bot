@@ -220,113 +220,182 @@ class AsyncHttpx:
         proxy: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
         cookies: dict[str, str] | None = None,
-        timeout: int = 30,  # noqa: ASYNC109
+        timeout: int = 30,
         stream: bool = False,
         follow_redirects: bool = True,
         **kwargs,
     ) -> bool:
-        """下载文件
+        """异步下载文件到指定路径。
 
-        参数:
-            url: url
-            path: 存储路径
-            params: params
-            verify: verify
-            use_proxy: 使用代理
-            proxy: 指定代理
+        Args:
+            url: 下载链接或链接列表
+            path: 保存文件的路径
+            params: 请求参数
+            verify: 是否验证SSL证书
+            use_proxy: 是否使用默认代理
+            proxy: 指定代理配置
             headers: 请求头
-            cookies: cookies
-            timeout: 超时时间
-            stream: 是否使用流式下载（流式写入+进度条，适用于下载大文件）
+            cookies: Cookie信息
+            timeout: 超时时间(秒)
+            stream: 是否使用流式下载
+            follow_redirects: 是否跟随重定向
+            **kwargs: 其他传递给 httpx 的参数
+
+        Returns:
+            bool: 下载是否成功
+
+        Raises:
+            TimeoutError: 下载超时
+            HTTPStatusError: HTTP状态码错误
+            Exception: 其他异常
         """
-        if isinstance(path, str):
-            path = Path(path)
+        path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            for _ in range(3):
-                if not isinstance(url, list):
-                    url = [url]
-                for u in url:
-                    try:
-                        if not stream:
-                            response = await cls.get(
-                                u,
-                                params=params,
-                                headers=headers,
-                                cookies=cookies,
-                                use_proxy=use_proxy,
-                                proxy=proxy,
-                                timeout=timeout,
-                                follow_redirects=follow_redirects,
-                                **kwargs,
-                            )
-                            response.raise_for_status()
-                            content = response.content
-                            async with aiofiles.open(path, "wb") as wf:
-                                await wf.write(content)
-                                logger.info(f"下载 {u} 成功.. Path：{path.absolute()}")
-                        else:
-                            if not headers:
-                                headers = get_user_agent()
-                            _proxy = proxy or (cls.proxy if use_proxy else None)
-                            async with httpx.AsyncClient(
-                                proxies=_proxy,  # type: ignore
-                                verify=verify,
-                            ) as client:
-                                async with client.stream(
-                                    "GET",
-                                    u,
-                                    params=params,
-                                    headers=headers,
-                                    cookies=cookies,
-                                    timeout=timeout,
-                                    follow_redirects=True,
-                                    **kwargs,
-                                ) as response:
-                                    response.raise_for_status()
-                                    logger.info(
-                                        f"开始下载 {path.name}.. "
-                                        f"Url: {u}.. "
-                                        f"Path: {path.absolute()}"
-                                    )
-                                    async with aiofiles.open(path, "wb") as wf:
-                                        total = int(
-                                            response.headers.get("Content-Length", 0)
-                                        )
-                                        with rich.progress.Progress(  # type: ignore
-                                            rich.progress.TextColumn(path.name),  # type: ignore
-                                            "[progress.percentage]{task.percentage:>3.0f}%",  # type: ignore
-                                            rich.progress.BarColumn(bar_width=None),  # type: ignore
-                                            rich.progress.DownloadColumn(),  # type: ignore
-                                            rich.progress.TransferSpeedColumn(),  # type: ignore
-                                        ) as progress:
-                                            download_task = progress.add_task(
-                                                "Download",
-                                                total=total or None,
-                                            )
-                                            async for chunk in response.aiter_bytes():
-                                                await wf.write(chunk)
-                                                await wf.flush()
-                                                progress.update(
-                                                    download_task,
-                                                    completed=response.num_bytes_downloaded,
-                                                )
-                                        logger.info(
-                                            f"下载 {u} 成功.. Path：{path.absolute()}"
-                                        )
-                        return True
-                    except (TimeoutError, ConnectTimeout, HTTPStatusError):
-                        logger.warning(f"下载 {u} 失败.. 尝试下一个地址..")
-                    except EndOfStream as e:
-                        logger.warning(
-                            f"下载 {url} EndOfStream 异常 Path：{path.absolute()}", e=e
+
+        urls = [url] if isinstance(url, str) else url
+
+        for _ in range(3):  # 重试3次
+            for current_url in urls:
+                try:
+                    if stream:
+                        success = await cls._download_with_stream(
+                            current_url, path, params, headers, cookies, 
+                            verify, use_proxy, proxy, timeout, follow_redirects, **kwargs
                         )
-                        if path.exists():
-                            return True
-            logger.error(f"下载 {url} 下载超时.. Path：{path.absolute()}")
-        except Exception as e:
-            logger.error(f"下载 {url} 错误 Path：{path.absolute()}", e=e)
+                    else:
+                        success = await cls._download_without_stream(
+                            current_url, path, params, headers, cookies,
+                            use_proxy, proxy, timeout, follow_redirects, **kwargs
+                        )
+                    if success:
+                        return True
+
+                except HTTPStatusError as e:
+                    status_code = e.response.status_code
+                    logger.warning(
+                        f"下载 {current_url} 失败: HTTP {status_code} - {e.response.reason_phrase}"
+                    )
+                    if status_code == 404:
+                        logger.error(f"资源不存在: {current_url}")
+                        continue
+                    elif status_code in (401, 403):
+                        logger.error(f"无访问权限: {current_url}")
+                        continue
+                    elif status_code >= 500:
+                        logger.error(f"服务器错误: {current_url}")
+                        continue
+                    else:
+                        logger.warning(f"尝试下一个地址: {current_url}")
+
+                except (TimeoutError, ConnectTimeout):
+                    logger.warning(f"下载 {current_url} 超时.. 尝试下一个地址..")
+                except EndOfStream as e:
+                    logger.warning(f"下载 {current_url} EndOfStream 异常 Path：{path.absolute()}", e=e)
+                    if path.exists():
+                        return True
+                except Exception as e:
+                    logger.error(f"下载 {current_url} 发生未知错误: {str(e)}")
+
+            # 所有URL都尝试完一轮后的等待
+            await asyncio.sleep(1)
+
+        logger.error(f"所有下载地址均失败 {url}.. Path：{path.absolute()}")
         return False
+
+    @classmethod
+    async def _check_response_status(cls, response: Response, url: str) -> None:
+        """检查响应状态码并处理异常情况
+
+        Args:
+            response: HTTP响应对象
+            url: 请求的URL
+
+        Raises:
+            HTTPStatusError: 当状态码不在2xx范围内时抛出
+        """
+        try:
+            response.raise_for_status()
+        except HTTPStatusError as e:
+            status_code = e.response.status_code
+            if status_code == 404:
+                raise HTTPStatusError(f"资源不存在: {url}", request=e.request, response=e.response)
+            elif status_code in (401, 403):
+                raise HTTPStatusError(f"无访问权限: {url}", request=e.request, response=e.response)
+            elif status_code >= 500:
+                raise HTTPStatusError(f"服务器错误: {url}", request=e.request, response=e.response)
+            raise
+
+    @classmethod
+    async def _download_without_stream(
+        cls, url: str, path: Path, params: dict | None,
+        headers: dict | None, cookies: dict | None,
+        use_proxy: bool, proxy: dict | None,
+        timeout: int, follow_redirects: bool,
+        **kwargs
+    ) -> bool:
+        """普通下载模式"""
+        response = await cls.get(
+            url, params=params, headers=headers,
+            cookies=cookies, use_proxy=use_proxy,
+            proxy=proxy, timeout=timeout,
+            follow_redirects=follow_redirects, **kwargs
+        )
+        
+        await cls._check_response_status(response, url)
+        
+        async with aiofiles.open(path, "wb") as wf:
+            await wf.write(response.content)
+            logger.info(f"下载 {url} 成功.. Path：{path.absolute()}")
+        return True
+
+    @classmethod
+    async def _download_with_stream(
+        cls, url: str, path: Path, params: dict | None,
+        headers: dict | None, cookies: dict | None,
+        verify: bool, use_proxy: bool, proxy: dict | None,
+        timeout: int, follow_redirects: bool,
+        **kwargs
+    ) -> bool:
+        """流式下载模式"""
+        if not headers:
+            headers = get_user_agent()
+        _proxy = proxy or (cls.proxy if use_proxy else None)
+
+        async with httpx.AsyncClient(proxies=_proxy, verify=verify) as client:
+            async with client.stream(
+                "GET", url, params=params, headers=headers,
+                cookies=cookies, timeout=timeout,
+                follow_redirects=follow_redirects, **kwargs
+            ) as response:
+                await cls._check_response_status(response, url)
+                logger.info(f"开始下载 {path.name}.. Url: {url}.. Path: {path.absolute()}")
+                return await cls._handle_stream_download(response, path)
+
+    @classmethod
+    async def _handle_stream_download(cls, response: Response, path: Path) -> bool:
+        """处理流式下载的具体逻辑"""
+        async with aiofiles.open(path, "wb") as wf:
+            total = int(response.headers.get("Content-Length", 0))
+            with rich.progress.Progress(
+                rich.progress.TextColumn(path.name),
+                "[progress.percentage]{task.percentage:>3.0f}%",
+                rich.progress.BarColumn(bar_width=None),
+                rich.progress.DownloadColumn(),
+                rich.progress.TransferSpeedColumn(),
+            ) as progress:
+                download_task = progress.add_task(
+                    "Download",
+                    total=total or None,
+                )
+                async for chunk in response.aiter_bytes():
+                    await wf.write(chunk)
+                    await wf.flush()
+                    progress.update(
+                        download_task,
+                        completed=response.num_bytes_downloaded,
+                    )
+                logger.info(f"下载成功.. Path：{path.absolute()}")
+        return True
 
     @classmethod
     async def gather_download_file(

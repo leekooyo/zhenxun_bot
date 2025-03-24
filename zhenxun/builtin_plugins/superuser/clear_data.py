@@ -96,12 +96,11 @@ def _clear_data() -> float:
 async def clear_temp_data_task():
     try:
         async with _clear_data_semaphore:
-            async with timeout(30):  # 30秒超时控制
-                size = await _clear_data()
-                logger.info(
-                    f"自动清理临时数据完成，共清理了 {size / 1024 / 1024:.2f}MB 的数据...",
-                    "定时任务",
-                )
+            size = await asyncio.wait_for(_clear_data(), timeout=30)  # 30秒超时控制
+            logger.info(
+                f"自动清理临时数据完成，共清理了 {size / 1024 / 1024:.2f}MB 的数据...",
+                "定时任务",
+            )
     except asyncio.TimeoutError:
         logger.error("清理临时数据超时", "定时任务")
     except Exception as e:

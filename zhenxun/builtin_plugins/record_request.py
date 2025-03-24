@@ -65,7 +65,7 @@ class Timer:
         return True if uid not in cls.data else time.time() - cls.data[uid] > 5 * 60
 
     @classmethod
-    def clear(cls):
+    async def clear(cls):
         now = time.time()
         cls.data = {k: v for k, v in cls.data.items() if v - now < 5 * 60}
 
@@ -264,6 +264,3 @@ async def clear_timer():
     except Exception as e:
         logger.error(f"清理计时器时发生错误: {e!s}")
 
-
-async def _():
-    Timer.clear()

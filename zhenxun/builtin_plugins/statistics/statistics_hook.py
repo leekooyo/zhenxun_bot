@@ -2,7 +2,7 @@
 Author: xx
 Date: 2025-03-22 14:42:41
 LastEditors: Do not edit
-LastEditTime: 2025-03-23 00:56:30
+LastEditTime: 2025-03-24 04:48:52
 Description: 
 FilePath: \zhenxun\zhenxun_bot\zhenxun\builtin_plugins\statistics\statistics_hook.py
 '''
@@ -72,12 +72,14 @@ async def _(
 async def bulk_statistics_task():
     try:
         async with _statistics_semaphore:
-            async with timeout(30):  # 30秒超时控制
+            async def _bulk_create():
                 call_list = TEMP_LIST.copy()
                 TEMP_LIST.clear()
                 if call_list:
                     await Statistics.bulk_create(call_list)
                 logger.debug(f"批量添加调用记录 {len(call_list)} 条", "定时任务")
+            
+            await asyncio.wait_for(_bulk_create(), timeout=30)  # 30秒超时控制
     except asyncio.TimeoutError:
         logger.error("批量添加调用记录超时", "定时任务")
     except Exception as e:

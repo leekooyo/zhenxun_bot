@@ -2,7 +2,7 @@
 Author: xx
 Date: 2025-03-22 14:42:41
 LastEditors: Do not edit
-LastEditTime: 2025-03-23 00:57:30
+LastEditTime: 2025-03-24 04:45:54
 Description: 
 FilePath: \zhenxun\zhenxun_bot\zhenxun\builtin_plugins\superuser\reload_setting.py
 '''
@@ -20,7 +20,6 @@ from zhenxun.utils.enum import PluginType
 from zhenxun.utils.message import MessageUtils
 
 import asyncio
-from asyncio import timeout
 
 __plugin_meta__ = PluginMetadata(
     name="重载配置",
@@ -78,10 +77,13 @@ async def _(session: EventSession, arparma: Arparma):
 async def auto_reload_config_task():
     try:
         async with _reload_semaphore:
-            async with timeout(30):  # 30秒超时控制
-                if Config.get_config("reload_setting", "AUTO_RELOAD"):
-                    Config.reload()
-                    logger.debug("已自动重载配置文件...")
+            if Config.get_config("reload_setting", "AUTO_RELOAD"):
+                await asyncio.wait_for(
+                    asyncio.sleep(0),  # 添加检查点
+                    timeout=30
+                )
+                Config.reload()
+                logger.debug("已自动重载配置文件...")
     except asyncio.TimeoutError:
         logger.error("重载配置文件超时...")
     except Exception as e:
