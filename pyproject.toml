@@ -61,6 +61,11 @@ matplotlib = "^3.10.1"
 emoji = "^2.14.1"
 nonebot-plugin-userinfo = "^0.2.6"
 wordcloud = "^1.9.4"
+jmcomic = "^2.5.32"
+img2pdf = "^0.6.0"
+pyminizip = "^0.2.6"
+dataclasses = "^0.6"
+typing = "^3.7.4.3"
 
 [tool.poetry.group.dev.dependencies]
 nonebug = "^0.4"
