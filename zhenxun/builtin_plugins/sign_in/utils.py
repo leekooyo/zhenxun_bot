@@ -61,7 +61,7 @@ async def init_image():
     SIGN_RESOURCE_PATH.mkdir(parents=True, exist_ok=True)
     SIGN_TODAY_CARD_PATH.mkdir(exist_ok=True, parents=True)
     # await generate_progress_bar_pic()
-    clear_sign_data_pic()
+    await clear_sign_data_pic()
 
 
 async def get_card(

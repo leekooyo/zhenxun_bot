@@ -468,6 +468,46 @@ class PlatformUtils:
         return target
 
 
+async def _send_to_single_group(
+    bot: Bot,
+    group: any,
+    message: str | UniMessage,
+    log_cmd: str | None,
+    used_group: list
+) -> bool:
+    """向单个群组发送消息
+    
+    参数:
+        bot: Bot实例
+        group: 群组信息
+        message: 消息内容
+        log_cmd: 日志标记
+        used_group: 已使用的群组列表
+    
+    返回:
+        bool: 发送是否成功
+    """
+    key = f"{group.group_id}:{group.channel_id}"
+    try:
+        target = PlatformUtils.get_target(
+            user_id=None,
+            group_id=group.group_id,
+            channel_id=group.channel_id,
+        )
+        if not target:
+            logger.warning("target为空", log_cmd, target=key)
+            return False
+            
+        used_group.append(key)
+        message_list = message
+        await MessageUtils.build_message(message_list).send(target, bot)
+        logger.debug("发送成功", log_cmd, target=key)
+        return True
+        
+    except Exception as e:
+        logger.error("发送失败", log_cmd, target=key, e=e)
+        return False
+
 async def broadcast_group(
     message: str | UniMessage,
     bot: Bot | list[Bot] | None = None,
@@ -481,28 +521,27 @@ async def broadcast_group(
 
     参数:
         message: 广播消息内容
-        bot: 指定bot对象.
-        bot_id: 指定bot id.
-        ignore_group: 忽略群聊列表.
-        check_func: 发送前对群聊检测方法，判断是否发送.
-        log_cmd: 日志标记.
+        bot: 指定bot对象
+        bot_id: 指定bot id
+        ignore_group: 忽略群聊列表
+        check_func: 发送前对群聊检测方法，判断是否发送
+        log_cmd: 日志标记
         platform: 指定平台
     """
+    BROADCAST_INTERVAL = 10  # 广播消息发送间隔（秒）
+    
     if platform and platform not in ["qq", "dodo", "kaiheila"]:
         raise ValueError("指定平台不支持")
     if not message:
         raise ValueError("群聊广播消息不能为空")
+
+    # 获取Bot列表
     bot_dict = nonebot.get_bots()
     bot_list: list[Bot] = []
     if bot:
-        if isinstance(bot, list):
-            bot_list = bot
-        else:
-            bot_list.append(bot)
+        bot_list = [bot] if not isinstance(bot, list) else bot
     elif bot_id:
-        _bot_id_list = bot_id
-        if isinstance(bot_id, str):
-            _bot_id_list = [bot_id]
+        _bot_id_list = [bot_id] if isinstance(bot_id, str) else bot_id
         for id_ in _bot_id_list:
             if bot_id in bot_dict:
                 bot_list.append(bot_dict[bot_id])
@@ -510,58 +549,55 @@ async def broadcast_group(
                 logger.warning(f"Bot:{id_} 对象未连接或不存在")
     else:
         bot_list = list(bot_dict.values())
+
     _used_group = []
     for _bot in bot_list:
         try:
             if platform and platform != PlatformUtils.get_platform(_bot):
                 continue
+                
             group_list, _ = await PlatformUtils.get_group_list(_bot)
-            if group_list:
-                for group in group_list:
-                    key = f"{group.group_id}:{group.channel_id}"
-                    try:
-                        if (
-                            ignore_group
-                            and (
-                                group.group_id in ignore_group
-                                or group.channel_id in ignore_group
-                            )
-                        ) or key in _used_group:
-                            logger.debug(
-                                "广播方法群组重复, 已跳过...",
-                                log_cmd,
-                                group_id=group.group_id,
-                            )
-                            continue
-                        is_run = False
-                        if check_func:
-                            if is_coroutine_callable(check_func):
-                                is_run = await check_func(_bot, group.group_id)
-                            else:
-                                is_run = check_func(_bot, group.group_id)
-                        if not is_run:
-                            logger.debug(
-                                "广播方法检测运行方法为 False, 已跳过...",
-                                log_cmd,
-                                group_id=group.group_id,
-                            )
-                            continue
-                        target = PlatformUtils.get_target(
-                            user_id=None,
-                            group_id=group.group_id,
-                            channel_id=group.channel_id,
-                        )
-                        if target:
-                            _used_group.append(key)
-                            message_list = message
-                            await MessageUtils.build_message(message_list).send(
-                                target, _bot
-                            )
-                            logger.debug("发送成功", log_cmd, target=key)
-                            await asyncio.sleep(random.randint(1, 3))
-                        else:
-                            logger.warning("target为空", log_cmd, target=key)
-                    except Exception as e:
-                        logger.error("发送失败", log_cmd, target=key, e=e)
+            if not group_list:
+                continue
+
+            for index, group in enumerate(group_list):
+                key = f"{group.group_id}:{group.channel_id}"
+                
+                # 检查是否需要跳过该群组
+                if (ignore_group and (
+                    group.group_id in ignore_group or 
+                    group.channel_id in ignore_group
+                )) or key in _used_group:
+                    logger.debug(
+                        "广播方法群组重复, 已跳过...",
+                        log_cmd,
+                        group_id=group.group_id,
+                    )
+                    continue
+
+                # 检查是否允许发送
+                is_run = True
+                if check_func:
+                    if is_coroutine_callable(check_func):
+                        is_run = await check_func(_bot, group.group_id)
+                    else:
+                        is_run = check_func(_bot, group.group_id)
+                
+                if not is_run:
+                    logger.debug(
+                        "广播方法检测运行方法为 False, 已跳过...",
+                        log_cmd,
+                        group_id=group.group_id,
+                    )
+                    continue
+
+                # 发送消息
+                await _send_to_single_group(_bot, group, message, log_cmd, _used_group)
+                
+                # 不是最后一个群组时等待
+                if index < len(group_list) - 1:
+                    logger.debug(f"等待 {BROADCAST_INTERVAL} 秒后继续发送", log_cmd)
+                    await asyncio.sleep(BROADCAST_INTERVAL)
+                    
         except Exception as e:
             logger.error(f"Bot: {_bot.self_id} 获取群聊列表失败", command=log_cmd, e=e)

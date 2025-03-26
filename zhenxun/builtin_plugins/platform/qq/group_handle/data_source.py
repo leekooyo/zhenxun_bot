@@ -2,6 +2,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 import random
+from typing import Optional, List, Dict
 
 from nonebot.adapters import Bot
 from nonebot.exception import ActionFailed
@@ -32,55 +33,107 @@ WELCOME_PATH = DATA_PATH / "welcome_message"
 
 DEFAULT_IMAGE_PATH = IMAGE_PATH / "qxz"
 
+class WelcomeMessageManager:
+    """欢迎消息管理类"""
+    
+    def __init__(self, flmt: FreqLimiter):
+        self._flmt = flmt
 
-class GroupManager:
-    _flmt = FreqLimiter(limit_cd)
+    def get_path(self, session: Uninfo) -> Path | None:
+        """获取欢迎消息存储路径"""
+        if not session.group:
+            return None
+        platform = PlatformUtils.get_platform(session) or "qq"
+        path = WELCOME_PATH / f"{platform}" / f"{session.group.id}"
+        if session.group.parent:
+            path = WELCOME_PATH / f"{platform}" / f"{session.group.parent.id}" / f"{session.group.id}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
-    @classmethod
-    async def __handle_add_group(
-        cls, bot: Bot, group_id: str, group: GroupConsole | None
-    ):
-        """允许群组并设置群认证，默认群功能开关
+    def get_welcome_data(self, session: Uninfo) -> dict | None:
+        """获取欢迎消息数据"""
+        if not session.group:
+            return None
+        path = self.get_path(session)
+        if not path:
+            return None
+        file = path / "text.json"
+        if not file.exists():
+            return None
+        with file.open(encoding="utf8") as f:
+            return json.load(f)
 
-        参数:
-            bot: Bot
-            group_id: 群组id
-            group: GroupConsole
-        """
-        if group:
-            group.group_flag = 1
-            await group.save(update_fields=["group_flag"])
-        else:
-            block_plugin = ""
-            if plugin_list := await PluginInfo.filter(default_status=False).all():
-                for plugin in plugin_list:
-                    block_plugin += f"<{plugin.module},"
-            group_info = await bot.get_group_info(group_id=group_id, no_cache=True)
-            await GroupConsole.create(
-                group_id=group_info["group_id"],
-                group_name=group_info["group_name"],
-                max_member_count=group_info["max_member_count"],
-                member_count=group_info["member_count"],
-                group_flag=1,
-                block_plugin=block_plugin,
-                platform="qq",
-            )
+    def load_welcome_file(self, file_path: Path) -> Optional[dict]:
+        """加载欢迎语文件"""
+        try:
+            if file_path.exists():
+                return json.load(open(file_path, "r", encoding="utf8"))
+        except Exception as e:
+            logger.error(f"读取欢迎语文件失败 {file_path}: {e}")
+        return None
 
-    @classmethod
-    async def __refresh_level(cls, bot: Bot, group_id: str):
-        """刷新权限
+    def build_welcome_message(self, json_data: dict, user_id: str) -> Optional[UniMessage]:
+        """构建欢迎消息"""
+        try:
+            active_keys = [k for k in json_data.keys() if json_data[k]["status"]]
+            if not active_keys:
+                return None
+            
+            key = random.choice(active_keys)
+            welcome_data = json_data[key]
+            msg_list = UniMessage().load(welcome_data["message"])
+            
+            if welcome_data["at"]:
+                msg_list.insert(0, At("user", user_id))
+            
+            return msg_list
+        except Exception as e:
+            logger.error(f"构建欢迎消息失败: {e}")
+            return None
 
-        参数:
-            bot: Bot
-            group_id: 群组id
-        """
+    def build_default_message(self) -> UniMessage:
+        """构建默认的图片消息"""
+        image = DEFAULT_IMAGE_PATH / random.choice(os.listdir(DEFAULT_IMAGE_PATH))
+        return MessageUtils.build_message([
+            "新人快跑啊！！本群现状↓（快使用自定义群欢迎消息！）",
+            image,
+        ])
+
+    async def send_welcome_message(self, session: Uninfo, user_id: str):
+        """发送群欢迎消息"""
+        if not session.group:
+            return
+        
+        self._flmt.start_cd(session.group.id)
+        platform = PlatformUtils.get_platform(session) or "qq"
+
+        json_data = self.get_welcome_data(session)
+        if not json_data:
+            default_file = WELCOME_PATH / platform / "text.json"
+            json_data = self.load_welcome_file(default_file)
+
+        if json_data:
+            msg_list = self.build_welcome_message(json_data, user_id)
+            if msg_list:
+                logger.info("发送群欢迎消息...", "入群检测", session=session)
+                await msg_list.finish()
+                return
+
+        await self.build_default_message().send()
+
+class GroupPermissionManager:
+    """群组权限管理类"""
+    
+    @staticmethod
+    async def refresh_level(bot: Bot, group_id: str):
+        """刷新群组权限"""
         admin_default_auth = Config.get_config("admin_bot_manage", "ADMIN_DEFAULT_AUTH")
         member_list = await bot.get_group_member_list(group_id=group_id)
         member_id_list = [str(user_info["user_id"]) for user_info in member_list]
         flag2u = await LevelUser.filter(
             user_id__in=member_id_list, group_id=group_id, group_flag=1
         ).values_list("user_id", flat=True)
-        # 即刻刷新权限
+
         for user_info in member_list:
             user_id = str(user_info["user_id"])
             role = user_info["role"]
@@ -109,24 +162,66 @@ class GroupManager:
                     group_id=user_info["group_id"],
                 )
 
-    @classmethod
-    async def add_bot(
-        cls, bot: Bot, operator_id: str, group_id: str, group: GroupConsole
-    ):
-        """拉入bot
+class UserInfoManager:
+    """用户信息管理类"""
+    
+    @staticmethod
+    async def update_user_info(bot: Bot, user_id: str, group_id: str, join_time: datetime):
+        """更新用户信息"""
+        try:
+            user_info = await bot.get_group_member_info(
+                group_id=int(group_id), user_id=int(user_id), no_cache=True
+            )
+        except ActionFailed as e:
+            logger.warning("获取用户信息失败...", e=e)
+            user_info = {"user_id": user_id, "group_id": group_id, "nickname": ""}
+            
+        await GroupInfoUser.update_or_create(
+            user_id=str(user_info["user_id"]),
+            group_id=str(user_info["group_id"]),
+            defaults={
+                "user_name": user_info["nickname"],
+                "user_join_time": join_time,
+            },
+        )
+        logger.info(f"用户{user_info['user_id']} 所属{user_info['group_id']} 更新成功")
 
-        参数:
-            bot: Bot
-            operator_id: 操作者id
-            group_id: 群组id
-            group: GroupConsole
-        """
+class GroupManager:
+    """群组管理主类"""
+    
+    _flmt = FreqLimiter(limit_cd)
+    _welcome_manager = WelcomeMessageManager(_flmt)
+
+    @classmethod
+    async def __handle_add_group(cls, bot: Bot, group_id: str, group: GroupConsole | None):
+        """处理群组添加"""
+        if group:
+            group.group_flag = 1
+            await group.save(update_fields=["group_flag"])
+        else:
+            block_plugin = ""
+            if plugin_list := await PluginInfo.filter(default_status=False).all():
+                for plugin in plugin_list:
+                    block_plugin += f"<{plugin.module},"
+            group_info = await bot.get_group_info(group_id=group_id, no_cache=True)
+            await GroupConsole.create(
+                group_id=group_info["group_id"],
+                group_name=group_info["group_name"],
+                max_member_count=group_info["max_member_count"],
+                member_count=group_info["member_count"],
+                group_flag=1,
+                block_plugin=block_plugin,
+                platform="qq",
+            )
+
+    @classmethod
+    async def add_bot(cls, bot: Bot, operator_id: str, group_id: str, group: GroupConsole):
+        """添加机器人到群组"""
         if (
             base_config.get("flag")
             and operator_id not in bot.config.superusers
             and group.group_flag != 1
         ):
-            """退出群组"""
             try:
                 if result_msg := base_config.get("message"):
                     await bot.send_group_msg(group_id=int(group_id), message=result_msg)
@@ -149,90 +244,11 @@ class GroupManager:
             raise ForceAddGroupError(f"触发强制入群保护，已成功退出群聊 {group_id}...")
         else:
             await cls.__handle_add_group(bot, group_id, group)
-            """刷新群管理员权限"""
-            await cls.__refresh_level(bot, group_id)
-
-    @classmethod
-    def get_path(cls, session: Uninfo) -> Path | None:
-        """根据Session获取存储路径
-
-        参数:
-            session: Uninfo:
-
-        返回:
-            Path: 存储路径
-        """
-        if not session.group:
-            return None
-        platform = PlatformUtils.get_platform(session)
-        path = WELCOME_PATH / f"{platform}" / f"{session.group.id}"
-        if session.group.parent:
-            path = (
-                WELCOME_PATH
-                / f"{platform}"
-                / f"{session.group.parent.id}"
-                / f"{session.group.id}"
-            )
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    @classmethod
-    def __get_welcome_data(cls, session: Uninfo) -> dict | None:
-        """获取存储数据
-
-        参数:
-            session: Uninfo
-
-        返回:
-            dict | None: 欢迎消息数据
-        """
-        if not session.group:
-            return None
-        path = cls.get_path(session)
-        if not path:
-            return None
-        file = path / "text.json"
-        if not file.exists():
-            return None
-        with file.open(encoding="utf8") as f:
-            return json.load(f)
-
-    @classmethod
-    async def __send_welcome_message(cls, session: Uninfo, user_id: str):
-        """发送群欢迎消息
-
-        参数:
-            user_id: 用户id
-            group_id: 群组id
-        """
-        if not session.group:
-            return
-        cls._flmt.start_cd(session.group.id)
-        if json_data := cls.__get_welcome_data(session):
-            key = random.choice([k for k in json_data.keys() if json_data[k]["status"]])
-            welcome_data = json_data[key]
-            msg_list = UniMessage().load(welcome_data["message"])
-            if welcome_data["at"]:
-                msg_list.insert(0, At("user", user_id))
-            logger.info("发送群欢迎消息...", "入群检测", session=session)
-            if msg_list:
-                await MessageUtils.build_message(msg_list).finish()  # type: ignore
-        image = DEFAULT_IMAGE_PATH / random.choice(os.listdir(DEFAULT_IMAGE_PATH))
-        await MessageUtils.build_message(
-            [
-                "新人快跑啊！！本群现状↓（快使用自定义群欢迎消息！）",
-                image,
-            ]
-        ).send()
+            await GroupPermissionManager.refresh_level(bot, group_id)
 
     @classmethod
     async def add_user(cls, session: Uninfo, bot: Bot):
-        """拉入用户
-
-        参数:
-            session: Uninfo
-            bot: Bot
-        """
+        """添加用户到群组"""
         user_id = session.user.id
         group_id = ""
         if session.group:
@@ -240,47 +256,26 @@ class GroupManager:
                 group_id = session.group.parent.id
             else:
                 group_id = session.group.id
+                
         join_time = datetime.now()
-        try:
-            user_info = await bot.get_group_member_info(
-                group_id=int(group_id), user_id=int(user_id), no_cache=True
-            )
-        except ActionFailed as e:
-            logger.warning("获取用户信息识别...", e=e)
-            user_info = {"user_id": user_id, "group_id": group_id, "nickname": ""}
-        await GroupInfoUser.update_or_create(
-            user_id=str(user_info["user_id"]),
-            group_id=str(user_info["group_id"]),
-            defaults={
-                "user_name": user_info["nickname"],
-                "user_join_time": join_time,
-            },
-        )
-        logger.info(f"用户{user_info['user_id']} 所属{user_info['group_id']} 更新成功")
-        if not await CommonUtils.task_is_block(
-            session, "group_welcome"
-        ) and cls._flmt.check(group_id):
-            await cls.__send_welcome_message(session, user_id)
+        await UserInfoManager.update_user_info(bot, user_id, group_id, join_time)
+        
+        if not await CommonUtils.task_is_block(session, "group_welcome") and cls._flmt.check(group_id):
+            await cls._welcome_manager.send_welcome_message(session, user_id)
 
     @classmethod
     async def kick_bot(cls, bot: Bot, group_id: str, operator_id: str):
-        """踢出bot
-
-        参数:
-            bot: Bot
-            group_id: 群组id
-            operator_id: 操作员id
-        """
-        if user := await GroupInfoUser.get_or_none(
-            user_id=operator_id, group_id=group_id
-        ):
+        """机器人被踢出群组"""
+        if user := await GroupInfoUser.get_or_none(user_id=operator_id, group_id=group_id):
             operator_name = user.user_name
         else:
             operator_name = "None"
+            
         group = await GroupConsole.get_group(group_id)
         group_name = group.group_name if group else ""
         if group:
             await group.delete()
+            
         await PlatformUtils.send_superuser(
             bot,
             f"****呜..一份踢出报告****\n"
@@ -298,30 +293,20 @@ class GroupManager:
         operator_id: str,
         sub_type: str,
     ) -> str | None:
-        """踢出用户或用户离开
-
-        参数:
-            bot: Bot
-            user_id: 用户id
-            group_id: 群组id
-            operator_id: 操作员id
-            sub_type: 类型
-
-        返回:
-            str | None: 返回消息
-        """
+        """处理用户退出群组"""
         if user := await GroupInfoUser.get_or_none(user_id=user_id, group_id=group_id):
             user_name = user.user_name
+            await user.delete()
         else:
             user_name = f"{user_id}"
-        if user:
-            await user.delete()
+            
         logger.info(
             f"名称: {user_name} 退出群聊",
             "group_decrease_handle",
             session=user_id,
             group_id=group_id,
         )
+        
         if sub_type == "kick":
             if operator_id != "0":
                 operator = await bot.get_group_member_info(
