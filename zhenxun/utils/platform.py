@@ -336,12 +336,17 @@ class PlatformUtils:
             str | None: 平台
         """
         if isinstance(t, Bot):
-            if interface := get_interface(t):
+            interface = get_interface(t)
+            # logger.info(f"if分支获取interface {interface}", "平台")
+            if interface:
                 info = interface.basic_info()
+                # logger.info(f"if分支获取info {info}", "平台")
                 platform = info["scope"].lower()
+                # logger.info(f"if分支获取platform {platform}", "平台")
                 return "qq" if platform.startswith("qq") else platform
         else:
             platform = t.basic["scope"].lower()
+            #   logger.info(f"else分支获取platform {platform}", "平台")
             return "qq" if platform.startswith("qq") else platform
         return "unknown"
 
