@@ -86,6 +86,13 @@ async def _(bot: v12Bot | v11Bot, event: FriendRequestEvent, session: EventSessi
         # sex = user["sex"]
         # age = str(user["age"])
         comment = event.comment
+        
+        # 检查用户是否已存在
+        existing_user_name = await FriendUser.get_user_name(str(user["user_id"]))
+        if existing_user_name:
+            logger.debug("用户已存在，跳过创建", "好友请求", target=event.user_id)
+            return  # 用户已存在，直接返回
+        
         if base_config.get("AUTO_ADD_FRIEND"):
             logger.debug(
                 "已开启好友请求自动同意，成功通过该请求",
@@ -209,6 +216,12 @@ async def _(bot: v12Bot | v11Bot, event: GroupRequestEvent, session: EventSessio
             target=event.group_id,
         )
         nickname = await FriendUser.get_user_name(str(event.user_id))
+        
+        # 检查用户是否已存在
+        if nickname:
+            logger.debug("用户已存在，跳过创建", "群聊请求", target=event.user_id)
+            return  # 用户已存在，直接返回
+        
         await bot.send_private_msg(
             user_id=event.user_id,
             message=f"想要邀请我偷偷入群嘛~已经提醒{BotConfig.self_nickname}的管理员大人了\n"
