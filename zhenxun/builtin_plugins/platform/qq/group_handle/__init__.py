@@ -3,6 +3,7 @@ from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import (
     GroupDecreaseNoticeEvent,
     GroupIncreaseNoticeEvent,
+    GroupBanNoticeEvent,
 )
 from nonebot.adapters.onebot.v12 import (
     GroupMemberDecreaseEvent,
@@ -20,7 +21,7 @@ from zhenxun.utils.enum import PluginType
 from zhenxun.utils.platform import PlatformUtils
 from zhenxun.utils.rules import notice_rule
 
-from .data_source import GroupManager
+from .managers.event import GroupEventManager
 
 __plugin_meta__ = PluginMetadata(
     name="QQ群事件处理",
@@ -87,13 +88,6 @@ __plugin_meta__ = PluginMetadata(
     ).to_dict(),
 )
 
-
-base_config = Config.get("invite_manager")
-
-
-limit_cd = base_config.get("welcome_msg_cd")
-
-
 group_increase_handle = on_notice(
     priority=1,
     block=False,
@@ -109,6 +103,14 @@ group_decrease_handle = on_notice(
 add_group = on_request(priority=1, block=False)
 """加群同意请求"""
 
+group_ban_handle = on_notice(
+    priority=1,
+    block=False,
+    rule=notice_rule([GroupBanNoticeEvent]),
+)
+"""群禁言处理"""
+
+group_manager = GroupEventManager()
 
 @group_increase_handle.handle()
 async def _(
@@ -122,13 +124,13 @@ async def _(
             group_id=str(event.group_id), channel_id__isnull=True
         )
         try:
-            await GroupManager.add_bot(
+            await group_manager.add_bot(
                 bot, str(event.operator_id), str(event.group_id), group
             )
         except ForceAddGroupError as e:
             await PlatformUtils.send_superuser(bot, e.get_info())
     else:
-        await GroupManager.add_user(session, bot)
+        await group_manager.add_user(session, bot)
 
 
 @group_decrease_handle.handle()
@@ -137,16 +139,34 @@ async def _(
     session: Uninfo,
     event: GroupDecreaseNoticeEvent | GroupMemberDecreaseEvent,
 ):
-    user_id = str(event.user_id)
-    group_id = str(event.group_id)
+    gid = str(event.group_id)
+    oid = str(event.operator_id)
+    uid = str(event.user_id)
     if event.sub_type == "kick_me":
         """踢出Bot"""
-        await GroupManager.kick_bot(bot, user_id, group_id)
+        await group_manager.kick_bot(bot, gid, oid)
     elif event.sub_type in ["leave", "kick"]:
-        result = await GroupManager.run_user(
-            bot, user_id, group_id, str(event.operator_id), event.sub_type
+        result = await group_manager.run_user(
+            bot, uid, gid, oid, event.sub_type
         )
         if result and not await CommonUtils.task_is_block(
             session, "refund_group_remind"
         ):
             await group_decrease_handle.send(result)
+
+
+@group_ban_handle.handle()
+async def _(
+    bot: Bot,
+    session: Uninfo,
+    event: GroupBanNoticeEvent,
+):
+    if session.user.id == bot.self_id:
+        """机器人被禁言"""
+        await group_manager.handle_ban(
+            bot,
+            str(event.group_id),
+            str(event.operator_id),
+            event.duration,
+            event.sub_type,
+        )
