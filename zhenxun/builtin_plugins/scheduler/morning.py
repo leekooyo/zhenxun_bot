@@ -1,11 +1,12 @@
-'''
+"""
 Author: xx
 Date: 2025-03-22 14:42:41
 LastEditors: Do not edit
 LastEditTime: 2025-03-25 23:21:12
-Description: 
+Description:
 FilePath: \zhenxun\zhenxun_bot\zhenxun\builtin_plugins\scheduler\morning.py
-'''
+"""
+
 from dataclasses import dataclass
 from datetime import datetime
 import asyncio
@@ -45,25 +46,29 @@ __plugin_meta__ = PluginMetadata(
     ).to_dict(),
 )
 
+
 @dataclass
 class SendResult:
     """发送结果"""
+
     success: bool
     message: str
 
+
 class GroupManager:
     """群组管理类"""
+
     @staticmethod
     async def get_platform_groups(platform: str) -> list[str]:
         """获取指定平台的有效群组"""
         return await GroupConsole.filter(
-            status=True,
-            channel_id__isnull=True,
-            platform=platform
+            status=True, channel_id__isnull=True, platform=platform
         ).values_list("group_id", flat=True)
+
 
 class MessageSender:
     """消息发送器"""
+
     def __init__(self, interval: int = 60):
         self.interval = interval
         self._semaphore = asyncio.Semaphore(5)
@@ -78,21 +83,23 @@ class MessageSender:
         try:
             if not await self.check_group(bot, group_id):
                 return SendResult(False, f"群 {group_id} 已禁用早晚安功能")
-                
+
             await PlatformUtils.send_message(bot, None, group_id, message)
             return SendResult(True, f"向群 {group_id} 发送成功")
         except Exception as e:
             return SendResult(False, f"向群 {group_id} 发送失败: {e}")
 
-    async def _send_to_platform(self, bot: Bot, groups: list, message: str, log_cmd: str) -> bool:
+    async def _send_to_platform(
+        self, bot: Bot, groups: list, message: str, log_cmd: str
+    ) -> bool:
         """向单个平台的群组发送消息
-        
+
         参数:
             bot: Bot实例
             groups: 群组列表
             message: 要发送的消息
             log_cmd: 日志命令标识
-            
+
         返回:
             bool: 是否全部发送成功
         """
@@ -103,7 +110,7 @@ class MessageSender:
 
         success = True
         total = len(groups)
-        
+
         for index, group_id in enumerate(groups, 1):
             result = await self.send_to_group(bot, group_id, message)
             if result.success:
@@ -111,21 +118,21 @@ class MessageSender:
             else:
                 logger.error(f"{log_cmd}: {result.message}")
                 success = False
-            
+
             # 不是最后一个群组时才需要等待
             if index < total:
                 logger.debug(f"{log_cmd}: 等待 {self.BROADCAST_INTERVAL} 秒后继续发送")
                 await asyncio.sleep(self.BROADCAST_INTERVAL)
-        
+
         return success
 
     async def broadcast(self, message: str, log_cmd: str) -> bool:
         """广播消息
-        
+
         参数:
             message: 要广播的消息
             log_cmd: 日志命令标识
-            
+
         返回:
             bool: 广播是否成功
         """
@@ -142,7 +149,7 @@ class MessageSender:
                 for bot in bots.values():
                     platform = PlatformUtils.get_platform(bot)
                     groups = await GroupManager.get_platform_groups(platform)
-                    
+
                     platform_success = await self._send_to_platform(
                         bot, groups, message, log_cmd
                     )
@@ -155,8 +162,10 @@ class MessageSender:
                 logger.error(f"{log_cmd}: 广播任务失败: {e}")
                 return False
 
+
 # 创建消息发送器实例
 message_sender = MessageSender()
+
 
 @scheduler.scheduled_job(
     "cron",
@@ -166,18 +175,16 @@ message_sender = MessageSender()
 async def morning_greeting():
     """早安问候"""
     start_time = datetime.now()
-    message = MessageUtils.build_message([
-        "早上好",
-        IMAGE_PATH / "zhenxun" / "zao.jpg"
-    ])
-    
+    message = MessageUtils.build_message(["早上好", IMAGE_PATH / "zhenxun" / "zao.jpg"])
+
     success = await message_sender.broadcast(message, "早安问候")
-    
+
     elapsed = (datetime.now() - start_time).total_seconds()
     if success:
         logger.info(f"早安问候任务完成，耗时: {elapsed:.2f}秒")
     else:
         logger.error(f"早安问候任务失败，耗时: {elapsed:.2f}秒")
+
 
 @scheduler.scheduled_job(
     "cron",
@@ -187,13 +194,15 @@ async def morning_greeting():
 async def night_greeting():
     """晚安问候"""
     start_time = datetime.now()
-    message = MessageUtils.build_message([
-        f"{BotConfig.self_nickname}要睡觉了，你们也要早点睡呀",
-        IMAGE_PATH / "zhenxun" / "sleep.jpg"
-    ])
-    
+    message = MessageUtils.build_message(
+        [
+            f"{BotConfig.self_nickname}要睡觉了，你们也要早点睡呀",
+            IMAGE_PATH / "zhenxun" / "sleep.jpg",
+        ]
+    )
+
     success = await message_sender.broadcast(message, "晚安问候")
-    
+
     elapsed = (datetime.now() - start_time).total_seconds()
     if success:
         logger.info(f"晚安问候任务完成，耗时: {elapsed:.2f}秒")
